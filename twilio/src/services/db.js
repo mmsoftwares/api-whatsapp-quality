@@ -24,12 +24,14 @@ const FB_DLL_50 =
  * ---------- Config MASTER (onde ficam os clientes) ----------
  * Preferimos FB_MASTER_*; se não existir, caímos nos FIREBIRD_* (legado).
  */
-const FIREBIRD_HOST = '192.168.1.252'
+const FIREBIRD_HOST = '177.67.203.208'
+const FIREBIRD_PORT = 7272
 const FIREBIRD_DATABASE = '/home/bdmm/Siserv/Database/DATABASE.GDB'
 const FIREBIRD_USER = 'SYSDBA'
 const FIREBIRD_PASSWORD = 'masterkey'
 const masterOptions = {
   host: FIREBIRD_HOST || process.env.FB_MASTER_HOST || process.env.FIREBIRD_HOST,
+  port: Number(process.env.FB_MASTER_PORT || process.env.FIREBIRD_PORT || FIREBIRD_PORT || 3050),
   database: FIREBIRD_DATABASE || process.env.FB_MASTER_DATABASE || process.env.FIREBIRD_DATABASE || "Siserv", // ex.: /home/bdmm/Siserv/Database/DATABASE.GDB
   user: FIREBIRD_USER || process.env.FB_MASTER_USER || process.env.FIREBIRD_USER,
   password: FIREBIRD_PASSWORD || process.env.FB_MASTER_PASSWORD || process.env.FIREBIRD_PASSWORD,
