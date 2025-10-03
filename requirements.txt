@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+python-multipart
+pytesseract
+pillow
+pdfminer.six
+openai
+fdb
+google-api-python-client
+google-auth
+python-dotenv
+google-auth-oauthlib==1.2.1
+google-auth-httplib2==0.2.0
+pydantic

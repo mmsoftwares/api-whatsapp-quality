@@ -1,0 +1,30 @@
+{
+  "name": "twilio-whatsapp-integration",
+  "version": "1.0.1",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "node --env-file=.env src/server.js",
+    "start": "node src/server.js",
+    "menu:gen": "node scripts/generate_menu_seed.js",
+    "menu:apply:25": "node scripts/run_sql_file.js --fb=25",
+    "menu:apply:50": "node scripts/run_sql_file.js --fb=50",
+    "menu:apply:file": "node scripts/run_sql_file.js --file="
+  },
+  "dependencies": {
+    "axios": "1.7.3",
+    "camelcase": "^8.0.0",
+    "dotenv": "16.4.5",
+    "express": "4.19.2",
+    "express-rate-limit": "7.4.0",
+    "form-data": "4.0.0",
+    "helmet": "7.1.0",
+    "morgan": "1.10.0",
+    "node-firebird": "^1.1.9",
+    "p-queue": "7.4.1",
+    "pino": "9.3.2",
+    "query": "^0.2.0",
+    "twilio": "5.3.6",
+    "uuid": "9.0.1"
+  }
+}

@@ -1,0 +1,513 @@
+vc vai modificar esse arquivo, pq n ta trazendo as Info
+
+# routes/entregas.py
+"""Consulta detalhes da entrega por número (Firebird Dialect 1) com fallbacks de tabela."""
+
+import logging
+from typing import Any, Dict, List
+import fdb
+from fastapi import APIRouter, HTTPException, Path
+from config import FIREBIRD_HOST, FIREBIRD_DATABASE, FIREBIRD_USER, FIREBIRD_PASSWORD
+
+router = APIRouter(prefix="/entregas", tags=["entregas"])
+
+def _connect():
+    # trava Dialeto 1
+    return fdb.connect(
+        host=FIREBIRD_HOST,
+        database=FIREBIRD_DATABASE,
+        user=FIREBIRD_USER,
+        password=FIREBIRD_PASSWORD,
+        sql_dialect=1,
+    )
+
+def _cols(cur) -> List[str]:
+    return [d[0].strip().upper() for d in cur.description]
+
+@router.get("/{numero}")
+def get_entrega_by_numero(
+    numero: str = Path(..., description="Número da entrega (ex.: 12345)"),
+):
+    numero = (numero or "").strip()
+    if not numero:
+        raise HTTPException(status_code=400, detail="Número da entrega inválido")
+
+    con = None
+    try:
+        con = _connect()
+        cur = con.cursor()
+
+        # 1) Query completa (ITEMORDCOLETA + TABCLI)
+        sql_full = """
+            SELECT FIRST 1
+                   m.NOMOVTRA                                AS NUMERO,
+                   CAST(NULL AS VARCHAR(20))                 AS STATUS,
+                   CAST(NULL AS DATE)                        AS DATA_PREVISTA,
+                   CAST(NULL AS DATE)                        AS DATA_ENTREGA,
+                   CAST(NULL AS VARCHAR(80))                 AS CLIENTE_NOME,
+                   CAST(NULL AS VARCHAR(20))                 AS CLIENTE_CNPJ,
+                   (SELECT mot.NOMCLI
+                      FROM TABCLI mot
+                     WHERE mot.NOCLI = m.NOMOT)             AS MOTORISTA_NOME,
+                   m.PLACACAR                                AS PLACA,
+                   (SELECT SUM(i.VLRTOTAL)
+                      FROM TABMOVTRA_NF i
+                     WHERE i.NOMOVTRA = m.NOMOVTRA)         AS VALOR_TOTAL
+              FROM TABMOVTRA m
+             WHERE m.NOMOVTRA = ?
+        """
+
+        try:
+            cur.execute(sql_full, (numero,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Entrega não encontrada")
+            cols = _cols(cur)
+
+        except fdb.fbcore.DatabaseError as e1:
+            msg1 = str(e1.args[0]) if getattr(e1, "args", None) else str(e1)
+            up1 = msg1.upper()
+
+            # 2) Fallback sem ITEMORDCOLETA
+            if "ITEMORDCOLETA" in up1 or "TABLE UNKNOWN" in up1:
+                logging.warning("ITEMORDCOLETA ausente. Usando fallback sem soma.")
+                sql_no_items = """
+                    SELECT FIRST 1
+                           m.NOMOVTRA                        AS NUMERO,
+                           CAST(NULL AS VARCHAR(20))         AS STATUS,
+                           CAST(NULL AS DATE)                AS DATA_PREVISTA,
+                           CAST(NULL AS DATE)                AS DATA_ENTREGA,
+                           CAST(NULL AS VARCHAR(80))         AS CLIENTE_NOME,
+                           CAST(NULL AS VARCHAR(20))         AS CLIENTE_CNPJ,
+                           (SELECT mot.NOMCLI
+                              FROM TABCLI mot
+                             WHERE mot.NOCLI = m.NOMOT)     AS MOTORISTA_NOME,
+                           m.PLACACAR                        AS PLACA,
+                           CAST(NULL AS NUMERIC(18,2))       AS VALOR_TOTAL
+                      FROM TABMOVTRA m
+                     WHERE m.NOMOVTRA = ?
+                """
+                try:
+                    cur.execute(sql_no_items, (numero,))
+                    row = cur.fetchone()
+                    if not row:
+                        raise HTTPException(status_code=404, detail="Entrega não encontrada")
+                    cols = _cols(cur)
+
+                except fdb.fbcore.DatabaseError as e2:
+                    msg2 = str(e2.args[0]) if getattr(e2, "args", None) else str(e2)
+                    up2 = msg2.upper()
+
+                    # 3) Fallback mínimo sem TABCLI (usa NOMOT direto)
+                    if "TABCLI" in up2 or "TABLE UNKNOWN" in up2:
+                        logging.warning("TABCLI ausente. Usando fallback mínimo (NOMOT).")
+                        sql_min = """
+                            SELECT FIRST 1
+                                   m.NOMOVTRA                AS NUMERO,
+                                   CAST(NULL AS VARCHAR(20)) AS STATUS,
+                                   CAST(NULL AS DATE)        AS DATA_PREVISTA,
+                                   CAST(NULL AS DATE)        AS DATA_ENTREGA,
+                                   CAST(NULL AS VARCHAR(80)) AS CLIENTE_NOME,
+                                   CAST(NULL AS VARCHAR(20)) AS CLIENTE_CNPJ,
+                                   m.NOMOT                   AS MOTORISTA_NOME,
+                                   m.PLACACAR                AS PLACA,
+                                   CAST(NULL AS NUMERIC(18,2)) AS VALOR_TOTAL
+                              FROM TABMOVTRA m
+                             WHERE m.NOMOVTRA = ?
+                        """
+                        cur.execute(sql_min, (numero,))
+                        row = cur.fetchone()
+                        if not row:
+                            raise HTTPException(status_code=404, detail="Entrega não encontrada")
+                        cols = _cols(cur)
+                    else:
+                        logging.exception("Erro no fallback sem ITEMORDCOLETA")
+                        raise
+            else:
+                logging.exception("Erro na query completa")
+                raise
+
+        # Mapeamento padrão para o webjs
+        m: Dict[str, Any] = {cols[i]: row[i] for i in range(len(cols))}
+        entrega = {
+            "numero": m.get("NUMERO"),
+            "status": m.get("STATUS"),
+            "data_prevista": m.get("DATA_PREVISTA"),
+            "data_entrega": m.get("DATA_ENTREGA"),
+            "cliente_nome": m.get("CLIENTE_NOME"),
+            "cliente_cnpj": m.get("CLIENTE_CNPJ"),
+            "motorista_nome": m.get("MOTORISTA_NOME"),
+            "placa": m.get("PLACA"),
+            "valor_total": m.get("VALOR_TOTAL"),
+        }
+        return {"status": "ok", "entrega": entrega}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception("Erro ao consultar entrega")
+        raise HTTPException(status_code=500, detail=f"Erro ao consultar entrega: {e}")
+    finally:
+        if con:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+
+
+baseado nesses arquivos>
+const express = require('express');
+const router = express.Router();
+const pLimit = require('p-limit').default;
+const { query } = require('../services/firebirdService');
+
+// Utilitários de formatação
+function formatarData(data) {
+  if (!data) return null;
+  const d = new Date(data);
+  const dia = String(d.getDate()).padStart(2, '0');
+  const mes = String(d.getMonth() + 1).padStart(2, '0');
+  const ano = d.getFullYear();
+  return `${dia}/${mes}/${ano}`;
+}
+
+function formatarDataHora(data) {
+  if (!data) return null;
+  const d = new Date(data);
+  const dia = String(d.getDate()).padStart(2, '0');
+  const mes = String(d.getMonth() + 1).padStart(2, '0');
+  const ano = d.getFullYear();
+  const horas = String(d.getHours()).padStart(2, '0');
+  const minutos = String(d.getMinutes()).padStart(2, '0');
+  return `${dia}/${mes}/${ano} ${horas}:${minutos}`;
+}
+
+router.get('/', async (req, res) => {
+  try {
+    console.log('📥 [Frontend] Iniciando busca de pedidos homologados...');
+
+    const maxConc = parseInt(req.query.limit, 30);
+    const concurrencyLimit = isNaN(maxConc) || maxConc <= 0 ? 30 : maxConc;
+    const limit = pLimit(concurrencyLimit);
+
+    const qtd = parseInt(req.query.qtd, 10);
+    const registros = isNaN(qtd) || qtd <= 0 ? 100 : qtd;
+
+    console.log(`⚙️ [Frontend] Concorrência: ${concurrencyLimit} | Quantidade: ${registros}`);
+
+    const mdfeItemSql = `
+      SELECT FIRST ${registros}
+        i.nomovtra,
+        i.noemp
+      FROM TABMDFE_ITEM i
+      JOIN TABMDFE m ON m.nomdfe = i.nomdfe
+      WHERE m.status CONTAINING 'Homologado'
+      ORDER BY i.nomovtra DESC
+    `;
+    const itensComMdfe = await query(mdfeItemSql);
+    console.log(`📦 [Frontend] ${itensComMdfe.length} pedidos com MDF-e homologado encontrados.`);
+
+    const result = [];
+
+    const tasks = itensComMdfe.map((item, index) =>
+      limit(async () => {
+        const { nomovtra, noemp } = item;
+        console.log(`🔄 [Frontend] Processando pedido ${index + 1} | NOMOVTRA: ${nomovtra}`);
+
+        const pedidoSql = `
+          SELECT
+            nomovtra, placacav, data, data_hora, noterm_col, noterm_dest, nocli,
+            processo, notipcont, container, nomot, placacar, placacar2, noemp,
+            notipfre, notipcarga
+          FROM TABMOVTRA
+          WHERE nomovtra = ?
+        `;
+        const [pedido] = await query(pedidoSql, [nomovtra]);
+        if (!pedido) return;
+
+        let nomeMotorista = null, cpfMotorista = null;
+        if (pedido.nomot) {
+          const [motorista] = await query('SELECT nomcli, cgccli FROM tabcli WHERE nocli = ?', [pedido.nomot]);
+          nomeMotorista = motorista?.nomcli || null;
+          cpfMotorista = motorista?.cgccli?.trim() || null;
+        }
+
+        const nfSql = `
+          SELECT 
+            ITEM, SENF, DATAEMI, QTDEVOL, PESOBR, ESP, PROD, TIPONF,
+            CHAVENFE, VLRTOTAL, VLRMERC, USUARIO, DESCROUTROS, TPDOC,
+            CFOP, NOCLI_DEST, NOCLI_REM, NONF, BC, ICMS, M3, PERMITIRUSO,
+            NOORDCOLETA, ITEMORDCOLETA
+          FROM TABMOVTRA_NF
+          WHERE NOMOVTRA = ?
+        `;
+        let notas = await query(nfSql, [nomovtra]);
+        notas = notas.map(nf => ({
+          ...nf,
+          DATAEMI: formatarData(nf.DATAEMI)
+        }));
+        const cfopsUtilizados = [...new Set(notas.map(nf => nf.CFOP).filter(Boolean))];
+
+        let docs = await query('EXECUTE PROCEDURE DOCFISCAL_PEDIDO(?)', [nomovtra]);
+        docs = docs.map(doc => ({
+          ...doc,
+          data: formatarDataHora(doc.data),
+          dataemiNf: formatarDataHora(doc.dataemiNf),
+          docfiscalDataemi: formatarDataHora(doc.docfiscalDataemi),
+          datafatura: formatarDataHora(doc.datafatura),
+          dataaverb: doc.dataaverb
+        }));
+
+        const contrato = docs.find(doc =>
+          doc.tac_notac ||
+          doc.tac_vlr ||
+          doc.tac_vlradiant ||
+          doc.tac_vlrdesc ||
+          doc.tac_vlrprov ||
+          doc.tac_vlrsaldo ||
+          doc.tac_vlrinss ||
+          doc.tac_vlrssenat ||
+          doc.tac_vlrirrf ||
+          doc.tac_vlrabast
+        );
+
+        const contratoFrete = contrato ? {
+          numeroContrato: contrato.tac_notac || null,
+          valorFrete: contrato.tac_vlr || null,
+          valorAdiantamento: contrato.tac_vlradiant || null,
+          valorDescontos: contrato.tac_vlrdesc || null,
+          valorProvisionado: contrato.tac_vlrprov || null,
+          saldoProvisionado: contrato.tac_vlrsaldo || null,
+          valorINSS: contrato.tac_vlrinss || null,
+          valorSestSenat: contrato.tac_vlrssenat || null,
+          valorIRRF: contrato.tac_vlrirrf || null,
+          valorAbastecimento: contrato.tac_vlrabast || null
+        } : null;
+
+        result.push({
+          numeroOrdem: pedido.nomovtra,
+          nomeMotorista,
+          cpfMotorista,
+          placaCavalo: pedido.placacav,
+          dataOperacao: formatarData(pedido.data),
+          horaOperacao: formatarDataHora(pedido.data_hora),
+          localColeta: pedido.notermCol,
+          localEntrega: pedido.notermDest,
+          clienteFaturamento: pedido.nocli,
+          processoCliente: pedido.processo,
+          tipoContainer: pedido.notipcont,
+          numeroContainer: pedido.container,
+          placaCarreta1: pedido.placacar,
+          placaCarreta2: pedido.placacar2,
+          empresa: pedido.noemp,
+          tipoFrete: pedido.notipfre,
+          tipoCarga: pedido.notipcarga,
+          notasFiscais: notas,
+          cfopsUtilizados,
+          documentosFiscais: docs,
+          contratoFrete
+        });
+
+        console.log(`✅ [Frontend] Pedido ${nomovtra} processado.`);
+      })
+    );
+
+    await Promise.all(tasks);
+    console.log('🏁 [Frontend] Todos os pedidos foram processados. Retornando JSON...');
+    res.json({ pedidos: result });
+  } catch (err) {
+    console.error('🔥 [Frontend] Erro ao buscar pedidos homologados:\n', err.stack);
+    res.status(500).json({ error: 'Erro ao buscar pedidos homologados' });
+  }
+});
+
+module.exports = router;
+
+
+e nesse arquivo>
+
+const express = require('express');
+const router = express.Router();
+const { query } = require('../services/firebirdService');
+
+// Formata para "dd/MM/yyyy"
+function formatarData(data) {
+  if (!data) return null;
+  const d = new Date(data);
+  const dia = String(d.getDate()).padStart(2, '0');
+  const mes = String(d.getMonth() + 1).padStart(2, '0');
+  const ano = d.getFullYear();
+  return `${dia}/${mes}/${ano}`;
+}
+
+// Formata para "dd/MM/yyyy HH:mm"
+function formatarDataHora(data) {
+  if (!data) return null;
+  const d = new Date(data);
+  const dia = String(d.getDate()).padStart(2, '0');
+  const mes = String(d.getMonth() + 1).padStart(2, '0');
+  const ano = d.getFullYear();
+  const horas = String(d.getHours()).padStart(2, '0');
+  const minutos = String(d.getMinutes()).padStart(2, '0');
+  return `${dia}/${mes}/${ano} ${horas}:${minutos}`;
+}
+
+router.get('/', async (req, res) => {
+  const { nomovtra } = req.query;
+
+  if (!nomovtra) {
+    console.warn('⚠️ Parâmetro "nomovtra" ausente na requisição');
+    return res.status(400).json({ erro: 'Parâmetro "nomovtra" é obrigatório' });
+  }
+
+  try {
+    console.time('🔎 Total da requisição');
+    console.log(`🔍 Buscando dados do pedido ${nomovtra}...`);
+
+    console.time('⏱ Pedido principal');
+    const pedidoSql = `
+      SELECT 
+        nomovtra,
+        placacav,
+        data,
+        data_hora,
+        noterm_col,
+        noterm_dest,
+        nocli,
+        processo,
+        notipcont,
+        container,
+        nomot,
+        placacar,
+        placacar2,
+        noemp,
+        notipfre,
+        notipcarga
+      FROM TABMOVTRA
+      WHERE nomovtra = ?
+    `;
+    const [pedido] = await query(pedidoSql, [nomovtra]);
+    console.timeEnd('⏱ Pedido principal');
+
+    if (!pedido) {
+      console.warn(`❌ Pedido ${nomovtra} não encontrado`);
+      return res.status(404).json({ erro: `Pedido ${nomovtra} não encontrado` });
+    }
+
+    console.log('✅ Pedido principal encontrado');
+    console.time('⏱ Motorista');
+    let nomeMotorista = null;
+    let cpfMotorista = null;
+    if (pedido.nomot) {
+      const [motoristaRow] = await query('SELECT nomcli, cgccli FROM tabcli WHERE nocli = ?', [pedido.nomot]);
+      nomeMotorista = motoristaRow?.nomcli || null;
+      cpfMotorista = motoristaRow?.cgccli?.trim() || null;
+    }
+    console.timeEnd('⏱ Motorista');
+    console.log(`👤 Motorista: ${nomeMotorista || 'Não informado'}`);
+
+    console.time('⏱ Notas fiscais');
+    const nfSql = `
+      SELECT 
+        ITEM, SENF, DATAEMI, QTDEVOL, PESOBR, ESP, PROD, TIPONF,
+        CHAVENFE, VLRTOTAL, VLRMERC, USUARIO, DESCROUTROS, TPDOC,
+        CFOP, NOCLI_DEST, NOCLI_REM, NONF, BC, ICMS, M3, PERMITIRUSO,
+        NOORDCOLETA, ITEMORDCOLETA
+      FROM TABMOVTRA_NF
+      WHERE NOMOVTRA = ?
+    `;
+    let notas = await query(nfSql, [nomovtra]);
+    notas = notas.map(nf => ({
+      ...nf,
+      DATAEMI: formatarData(nf.dataemi)
+    }));
+    const cfopsUtilizados = [...new Set(notas.map(nf => nf.CFOP).filter(Boolean))];
+    console.timeEnd('⏱ Notas fiscais');
+    console.log(`📄 ${notas.length} notas fiscais encontradas`);
+
+    console.time('⏱ Documentos fiscais');
+    let docs = await query('EXECUTE PROCEDURE DOCFISCAL_PEDIDO(?)', [nomovtra]);
+    docs = docs.map(doc => ({
+      ...doc,
+      data: formatarDataHora(doc.data),
+      dataemiNf: formatarDataHora(doc.dataemiNf),
+      docfiscalDataemi: formatarDataHora(doc.docfiscalDataemi),
+      datafatura: formatarDataHora(doc.datafatura),
+      dataaverb: doc.dataaverb
+    }));
+    console.timeEnd('⏱ Documentos fiscais');
+    console.log(`📦 ${docs.length} documentos fiscais processados`);
+
+    console.time('⏱ Contrato de Frete');
+    const contrato = docs.find(doc =>
+      doc.tac_notac ||
+      doc.tac_vlr ||
+      doc.tac_vlradiant ||
+      doc.tac_vlrdesc ||
+      doc.tac_vlrprov ||
+      doc.tac_vlrsaldo ||
+      doc.tac_vlrinss ||
+      doc.tac_vlrssenat ||
+      doc.tac_vlrirrf ||
+      doc.tac_vlrabast
+    );
+
+    const contratoFrete = contrato ? {
+      numeroContrato: contrato.tac_notac || null,
+      valorFrete: contrato.tac_vlr || null,
+      valorAdiantamento: contrato.tac_vlradiant || null,
+      valorDescontos: contrato.tac_vlrdesc || null,
+      valorProvisionado: contrato.tac_vlrprov || null,
+      saldoProvisionado: contrato.tac_vlrsaldo || null,
+      valorINSS: contrato.tac_vlrinss || null,
+      valorSestSenat: contrato.tac_vlrssenat || null,
+      valorIRRF: contrato.tac_vlrirrf || null,
+      valorAbastecimento: contrato.tac_vlrabast || null
+    } : null;
+    console.timeEnd('⏱ Contrato de Frete');
+    if (contratoFrete) {
+      console.log('💰 Contrato de frete localizado');
+    } else {
+      console.log('ℹ️ Nenhum contrato de frete encontrado');
+    }
+
+    console.timeEnd('🔎 Total da requisição');
+    console.log('✅ Dados do pedido enviados com sucesso');
+
+    res.json({
+      numeroOrdem: pedido.nomovtra,
+      nomeMotorista,
+      cpfMotorista,
+      placaCavalo: pedido.placacav,
+      dataOperacao: formatarData(pedido.data),
+      horaOperacao: formatarDataHora(pedido.data_hora),
+      localColeta: pedido.notermCol,
+      localEntrega: pedido.notermDest,
+      clienteFaturamento: pedido.nocli,
+      processoCliente: pedido.processo,
+      tipoContainer: pedido.notipcont,
+      numeroContainer: pedido.container,
+      placaCarreta1: pedido.placacar,
+      placaCarreta2: pedido.placacar2,
+      empresa: pedido.noemp,
+      tipoFrete: pedido.notipfre,
+      tipoCarga: pedido.notipcarga,
+      notasFiscais: notas,
+      cfopsUtilizados,
+      documentosFiscais: docs,
+      contratoFrete
+    });
+
+  } catch (err) {
+    console.error('🔥 Erro ao buscar pedido:\n', err.stack);
+    res.status(500).json({ erro: 'Erro interno ao buscar o pedido' });
+  }
+});
+
+module.exports = router;
+// para que vc saiba as selects, tables, joins e colunas e montar o primeiro arquivo dessa mensagem corretamente
+
+
+
+//#

@@ -1,0 +1,4 @@
+Para gerar os seeds de menu:
+1. Instale as dependências de Python e Node conforme o projeto.
+2. Execute: node scripts/generate_menu_seed.js
+Os arquivos insert_menu_fb25.sql e insert_menu_fb50.sql serão criados na raiz.

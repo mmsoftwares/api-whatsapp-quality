@@ -1,0 +1,32 @@
+# Ambiente virtual
+venv/
+venv32/
+
+# Cache do Python
+__pycache__/
+*.pyc
+*.pyo
+twilio/src/node_modules
+
+# Arquivos temporários
+temp_*
+uploads/
+twilio/src/tmp/
+twilio/tmp/
+# Configs sensíveis
+.env
+*.json
+!package.json
+credentials.json
+token.json
+
+# Arquivos de SO
+.DS_Store
+Thumbs.db
+
+# DLLs ou libs locais
+fbclient.dll
+
+node_modules/
+/node_modules
+/node_modules/
