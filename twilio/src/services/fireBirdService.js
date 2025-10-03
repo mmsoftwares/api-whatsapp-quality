@@ -14,11 +14,11 @@ function isAuthError(e) {
   return e?.gdscode === 335544472 || /user name and password are not defined/i.test(msg);
 }
 
-const FIREBIRD_HOST = "192.168.1.252";
+const FIREBIRD_HOST = "177.67.203.208";
 const FIREBIRD_DATABASE = "/home/bdmm/Siserv/Database/DATABASE.GDB";
 const FIREBIRD_USER = "SYSDBA";
 const FIREBIRD_PASSWORD = "masterkey";
-const FIREBIRD_PORT = "3050";
+const FIREBIRD_PORT = "7272";
 
 // Defaults que podem ser sobrescritos por variáveis de ambiente
 const baseConfig = {
