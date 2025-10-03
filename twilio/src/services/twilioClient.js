@@ -3,20 +3,22 @@
 // ATENÇÃO: CREDENCIAIS EXPLÍCITAS NO CÓDIGO (apenas para teste).
 // NÃO COMMITAR EM REPOSITÓRIO PÚBLICO / GIT REMOTO!
 // ============================================================
+import dotenv from "dotenv";
+dotenv.config();
 
 import twilio from "twilio";
 import logger from "../utils/logger.js";
 
 /* =========[ CONFIG EXPLÍCITA (HARD-CODED) ]========= */
 // Obrigatórios
-export const TWILIO_ACCOUNT_SID = "AC65f9333ba0a6f76d2990190db6640eed".trim();
-export const TWILIO_AUTH_TOKEN  = "8e79c00e4e3f1e06f2225a65d8b6507c".trim();
+export const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+export const TWILIO_AUTH_TOKEN  = process.env.TWILIO_AUTH_TOKEN;
 
 // Opcional: fallback de remetente (se o cliente não tiver from no banco)
 const TWILIO_WHATSAPP_FROM = "whatsapp:+17816788032".trim();
 
 // Opcional: base pública para cálculo correto da assinatura
-const BASE_URL = "https://purselike-elena-buckish.ngrok-free.dev".replace(/\/$/, "");
+const BASE_URL = "https://api-whatsapp-quality.onrender.com".replace(/\/$/, "");
 
 /* =========[ HELPERS DE LOG / VALIDAÇÃO ]========= */
 const maskSid   = (s) => (s ? `${s.slice(0, 4)}…${s.slice(-4)}` : "(none)");
@@ -197,3 +199,4 @@ export function validateTwilioSignature(req, res, next) {
   if (!valid) return res.status(403).send("Invalid signature");
   return next();
 }
+
