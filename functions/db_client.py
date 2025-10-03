@@ -19,25 +19,24 @@ MASTER_PASSWORD = "masterkey" # ajuste para a senha correta
 DEFAULT_CHARSET = "WIN1252"
 
 def _load_fbclient_hardcoded() -> str:
-    """Tenta carregar fbclient.dll por ordem de preferência, sem .env.
-
-    Ordem:
-    1) Firebird 2.5 (x64): C:\\Program Files\\Firebird\\Firebird_2_5\\bin\\fbclient.dll
-    2) Firebird 2.5 (x86): C:\\Program Files (x86)\\Firebird\\Firebird_2_5\\bin\\fbclient.dll
-    3) Firebird 5.0 (x64): C:\\Program Files\\Firebird\\Firebird_5_0\\fbclient.dll
-    4) Firebird 5.0 (x86): C:\\Program Files (x86)\\Firebird\\Firebird_5_0\\bin\\fbclient.dll
-
-    Retorna o caminho carregado ou lança o último erro se nenhum caminho funcionar.
+    """Tenta carregar fbclient.dll na ordem:
+    1) DLLs locais na raiz do projeto (fbclient-2-32.dll, fbclient-5-32.dll).
+    2) Diretórios padrão de instalação do Firebird.
     """
+    root_dir = Path(__file__).resolve().parent  # pasta onde está o código
     candidates = [
+        str(root_dir / "fbclient-2-32.dll"),
+        str(root_dir / "fbclient-5-32.dll"),
         r"C:/Program Files/Firebird/Firebird_2_5/bin/fbclient.dll",
         r"C:/Program Files (x86)/Firebird/Firebird_2_5/bin/fbclient.dll",
         r"C:/Program Files/Firebird/Firebird_5_0/fbclient.dll",
         r"C:/Program Files (x86)/Firebird/Firebird_5_0/bin/fbclient.dll",
     ]
+
     last_err = None
     arch = platform.architecture()[0]
     print(f"Python arquitetura: {arch}")
+
     for dll in candidates:
         try:
             if not Path(dll).exists():
@@ -45,12 +44,13 @@ def _load_fbclient_hardcoded() -> str:
             fdb.load_api(dll)
             print(f"fbclient.dll carregado de: {dll}")
             return dll
-        except Exception as e:  # pragma: no cover
+        except Exception as e:
             print(f"Falha ao carregar fbclient.dll em '{dll}': {e}")
             last_err = e
+
     if last_err:
         raise last_err
-    raise RuntimeError("Nenhum fbclient.dll encontrado nos caminhos padrão")
+    raise RuntimeError("Nenhum fbclient.dll encontrado (nem local nem sistema).")
 
 # Carrega a fbclient por tentativa, hardcoded
 FBCLIENT_DLL = _load_fbclient_hardcoded()
